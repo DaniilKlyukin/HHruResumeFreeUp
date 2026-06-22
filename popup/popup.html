@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <!-- Главный переключатель работы расширения (VPN-стиль) -->
+  <div class="card mb-3 p-2 bg-light border-secondary">
+    <div class="d-flex justify-content-between align-items-center">
+      <span class="fw-bold text-dark small" id="globalStatusLabel">Мониторинг активен</span>
+      <div class="form-check form-switch m-0">
+        <input class="form-check-input" type="checkbox" id="extensionGlobalToggle" checked style="width: 2.4em; height: 1.2em; cursor: pointer;">
+      </div>
+    </div>
+  </div>
+
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h5 class="m-0 text-dark">Автообновление резюме</h5>
+    <button id="addBtn" class="btn btn-sm btn-primary">Добавить текущее</button>
+  </div>
+
+  <!-- Список резюме -->
+  <div id="resumeList" class="mb-3">
+    <div class="text-muted text-center py-3">Загрузка данных...</div>
+  </div>
+
+  <!-- Форма добавления/редактирования -->
+  <div id="editForm" class="card d-none mb-3">
+    <div class="card-body p-3">
+      <h6 id="formTitle" class="card-title fw-bold">Параметры резюме</h6>
+      <input type="hidden" id="resumeId">
+      
+      <div class="mb-2">
+        <label class="form-label small fw-bold">Название резюме</label>
+        <input type="text" id="resumeName" class="form-control form-control-sm" placeholder="Например: C# Developer">
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label small fw-bold">Интервал автообновления</label>
+        <div class="row g-2">
+          <div class="col-6">
+            <div class="input-group input-group-sm">
+              <input type="number" id="intervalHours" class="form-control" min="0" value="4" step="1">
+              <span class="input-group-text">ч</span>
+            </div>
+          </div>
+          <div class="col-6">
+            <div class="input-group input-group-sm">
+              <input type="number" id="intervalMinutes" class="form-control" min="0" max="59" value="0" step="1">
+              <span class="input-group-text">мин</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="form-check form-switch mb-2">
+        <input class="form-check-input" type="checkbox" id="autoViewVacancies" checked>
+        <label class="form-check-label small fw-bold" for="autoViewVacancies">Просматривать вакансии для активности</label>
+      </div>
+
+      <div id="vacancyViewDurationContainer" class="mb-2 d-none">
+        <div class="mb-2">
+          <label class="form-label small fw-bold" style="font-size: 11px;">Среднее время просмотра одной вакансии (сек)</label>
+          <input type="number" id="vacancyViewDuration" class="form-control form-control-sm" min="5" max="300" value="15" step="1">
+        </div>
+      </div>
+
+      <div class="form-check form-switch mb-2">
+        <input class="form-check-input" type="checkbox" id="autoLikeVacancies">
+        <label class="form-check-label small fw-bold" for="autoLikeVacancies">Авто-лайк по ключевым навыкам</label>
+      </div>
+
+      <div id="autoLikeContainer" class="mb-3 d-none">
+        <div class="mb-2">
+          <label class="form-label small fw-bold">Ключевые слова (через запятую)</label>
+          <textarea id="likeKeywords" class="form-control form-control-sm" rows="2" style="font-size: 11px;" placeholder="Навыки добавятся автоматически при импорте резюме..."></textarea>
+        </div>
+        <div class="row g-2">
+          <div class="col-6">
+            <label class="form-label small fw-bold" style="font-size: 11px;">Мин. покрытие навыков (%)</label>
+            <input type="number" id="minLikePercentage" class="form-control form-control-sm" min="1" max="100" value="60" step="1">
+          </div>
+          <div class="col-6">
+            <label class="form-label small fw-bold" style="font-size: 11px;">Мин. совпадений</label>
+            <input type="number" id="minLikeMatches" class="form-control form-control-sm" min="1" max="20" value="3" step="1">
+          </div>
+        </div>
+      </div>
+
+      <div class="d-flex justify-content-end gap-2">
+        <button id="cancelBtn" class="btn btn-sm btn-secondary">Отмена</button>
+        <button id="saveBtn" class="btn btn-sm btn-success">Сохранить</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Консоль логов (Скрыта по умолчанию) -->
+  <div class="mt-3 border-top pt-2">
+    <div class="d-flex justify-content-between align-items-center mb-1">
+      <div class="d-flex align-items-center gap-2">
+        <span class="small fw-bold text-muted" style="cursor: pointer;" id="headerLogsTitle">Логи расширения</span>
+        <div class="form-check form-switch m-0" style="padding-left: 2.3em;">
+          <input class="form-check-input" type="checkbox" id="loggingToggle" checked style="font-size: 0.8rem; margin-top: 0.3em; cursor: pointer;">
+        </div>
+      </div>
+      <div class="d-flex gap-2">
+        <button id="toggleLogsCollapse" class="btn btn-link p-0 text-primary small text-decoration-none" style="font-size: 11px;">Развернуть</button>
+        <span class="text-muted" style="font-size: 11px;">|</span>
+        <button id="clearLogsBtn" class="btn btn-link p-0 text-muted small text-decoration-none" style="font-size: 11px;">Очистить</button>
+      </div>
+    </div>
+    
+    <div id="logConsoleContainer" class="d-none">
+      <div id="logConsole" class="bg-light p-2 border rounded small font-monospace overflow-auto text-dark" style="height: 120px; font-size: 11px; line-height: 1.35;">
+        <div class="text-muted text-center py-2">Пусто</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="text-muted small text-center border-top pt-2 mt-2" style="font-size: 10px;">
+    Планировщик работает автоматически, пока запущен браузер.
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

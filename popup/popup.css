@@ -1,0 +1,26 @@
+body {
+  width: 480px;
+  font-family: system-ui, -apple-system, sans-serif;
+  padding: 15px;
+  background-color: #fdfdfd;
+}
+
+.resume-card {
+  border: 1px solid #dee2e6;
+  border-radius: 6px;
+  padding: 12px;
+  margin-bottom: 10px;
+}
+
+#logConsole {
+  border-color: #e2e8f0 !important;
+  background-color: #f8fafc !important;
+}
+
+#headerLogsTitle {
+  transition: color 0.15s ease-in-out;
+}
+
+#headerLogsTitle:hover {
+  color: #4a5568 !important;
+}
