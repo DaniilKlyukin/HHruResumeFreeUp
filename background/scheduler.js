@@ -1,11 +1,12 @@
 import { logMessage } from './logger.js';
-import { isExtensionEnabled } from './storage.js';
+import { isExtensionEnabled, registerSystemTab, unregisterSystemTab, gcSystemTabs } from './storage.js';
 import { viewRecommendedVacancies } from './vacancies.js';
 
 const delay = (ms) => new Promise(res => setTimeout(res, ms));
 
-function safeRemoveTab(tabId) {
+async function safeRemoveTab(tabId) {
   if (!tabId) return;
+  await unregisterSystemTab(tabId);
   chrome.tabs.remove(tabId, () => {
     if (chrome.runtime.lastError) {
       console.log("Ожидаемое поведение: закрытие вкладки подавлено.", chrome.runtime.lastError.message);
@@ -14,10 +15,16 @@ function safeRemoveTab(tabId) {
 }
 
 export async function processPendingUpdates() {
-  // Глобальная проверка работы плагина
   const enabled = await isExtensionEnabled();
   if (!enabled) {
     return; 
+  }
+
+  // Очистка потенциально зависших вкладок перед началом нового сеанса работы
+  try {
+    await gcSystemTabs();
+  } catch (err) {
+    console.error("Ошибка сборщика мусора вкладок:", err);
   }
 
   const data = await chrome.storage.local.get({ resumes: [] });
@@ -84,7 +91,7 @@ export async function processPendingUpdates() {
   }
 }
 
-function executeUpdateInHiddenTab(resumeId) {
+ function executeUpdateInHiddenTab(resumeId) {
   return new Promise((resolve) => {
     chrome.tabs.create({ url: `https://hh.ru/resume/${resumeId}`, active: false }, async (tab) => {
       if (chrome.runtime.lastError || !tab || !tab.id) {
@@ -93,16 +100,41 @@ function executeUpdateInHiddenTab(resumeId) {
       }
 
       const tabId = tab.id;
+      await registerSystemTab(tabId);
       let isResolved = false;
 
-      const runScript = async () => {
+      const cleanUpAndResolve = async (status) => {
         if (isResolved) return;
         isResolved = true;
         
         chrome.tabs.onUpdated.removeListener(listener);
         clearTimeout(safetyTimeout);
+        await safeRemoveTab(tabId);
+        resolve(status);
+      };
 
+      const runScript = async () => {
+        // Защита №1: Если вкладка уже находится в процессе закрытия/разрешения, выходим
+        if (isResolved) return;
+        
+        // Мгновенно отключаем слушатель обновлений, чтобы предотвратить дублирующие вызовы runScript
+        chrome.tabs.onUpdated.removeListener(listener);
+
+        // Даем странице 1.5 секунды на окончательную стабилизацию верстки
         setTimeout(async () => {
+          // Защита №2: Проверяем, существует ли вкладка физически перед инъекцией скрипта
+          try {
+            const checkTab = await chrome.tabs.get(tabId);
+            if (!checkTab) {
+              await cleanUpAndResolve('error');
+              return;
+            }
+          } catch (_) {
+            // Вкладка была закрыта пользователем или системой во время ожидания тайм-аута
+            await cleanUpAndResolve('error');
+            return;
+          }
+
           try {
             const results = await chrome.scripting.executeScript({
               target: { tabId: tabId },
@@ -117,16 +149,16 @@ function executeUpdateInHiddenTab(resumeId) {
                   if (!btn) {
                     const buttons = Array.from(document.querySelectorAll('button'));
                     btn = buttons.find(b => {
-                      const text = (b.textContent || '').replace(/\s+/g, ' ').trim();
-                      return text.includes('Поднять в поиске');
+                      const text = (b.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+                      return text.includes('поднять в поиске');
                     });
                   }
 
                   if (btn) {
-                    const text = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+                    const text = (btn.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
                     const isDisabled = btn.disabled || 
                                        btn.getAttribute('aria-disabled') === 'true' ||
-                                       text.includes('Будет доступно') || 
+                                       text.includes('будет доступно') || 
                                        text.includes('поднято');
 
                     if (isDisabled) {
@@ -155,13 +187,12 @@ function executeUpdateInHiddenTab(resumeId) {
               args: [resumeId]
             });
 
-            safeRemoveTab(tabId);
             const status = results && results[0] && results[0].result;
-            resolve(status || 'error');
+            await cleanUpAndResolve(status || 'error');
           } catch (e) {
+            // Мягкий перехват исключения, если вкладка закрылась прямо во время выполнения скрипта
             console.error("Ошибка выполнения скрипта во вкладке:", e);
-            safeRemoveTab(tabId);
-            resolve('error');
+            await cleanUpAndResolve('error');
           }
         }, 1500);
       };
@@ -179,14 +210,7 @@ function executeUpdateInHiddenTab(resumeId) {
       }
 
       const safetyTimeout = setTimeout(async () => {
-        if (isResolved) return;
-        isResolved = true;
-        chrome.tabs.onUpdated.removeListener(listener);
-        try {
-          const checkTab = await chrome.tabs.get(tabId);
-          if (checkTab) safeRemoveTab(tabId);
-        } catch (_) {}
-        resolve('error');
+        await cleanUpAndResolve('error');
       }, 35000);
     });
   });

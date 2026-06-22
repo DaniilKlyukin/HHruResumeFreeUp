@@ -322,6 +322,16 @@ if (clearLogsBtn) {
   });
 }
 
+const clearCacheBtn = document.getElementById('clearCacheBtn');
+if (clearCacheBtn) {
+  clearCacheBtn.addEventListener('click', async () => {
+    if (confirm('Сбросить базу данных просмотренных вакансий? Ранее обойденные вакансии снова будут расцениваться расширением как новые.')) {
+      await chrome.storage.local.set({ viewedVacancies: [] });
+      alert('Кэш просмотренных вакансий успешно очищен.');
+    }
+  });
+}
+
 cancelBtn.addEventListener('click', () => {
   editConfigReset();
 });
