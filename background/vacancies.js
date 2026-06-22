@@ -1,5 +1,5 @@
 import { logMessage } from './logger.js';
-import { isVacancyViewed, markVacancyAsViewed, registerSystemTab, unregisterSystemTab } from './storage.js';
+import { isVacancyViewed, markVacancyAsViewed, registerSystemTab, unregisterSystemTab, isExtensionEnabled } from './storage.js';
 
 const delay = (ms) => new Promise(res => setTimeout(res, ms));
 
@@ -22,16 +22,37 @@ function extractVacancyId(url) {
   }
 }
 
+// Служебная проверка: не остановил ли пользователь работу программы во время выполнения цикла
+async function shouldAbortVacancyLoop(resumeId) {
+  // 1. Проверяем глобальный VPN-переключатель работы плагина
+  const enabled = await isExtensionEnabled();
+  if (!enabled) return true;
+
+  // 2. Проверяем статус активности конкретного резюме
+  const { resumes = [] } = await chrome.storage.local.get('resumes');
+  const currentConfig = resumes.find(r => r.id === resumeId);
+  if (!currentConfig || !currentConfig.isActive) {
+    return true;
+  }
+
+  return false;
+}
+
 export async function viewRecommendedVacancies(config) {
   await logMessage(`[Просмотр вакансий] Получение списка подходящих вакансий для резюме "${config.name}"...`, "info");
   const baseSearchUrl = `https://hh.ru/search/vacancy?resume=${config.id}`;
   
   let unviewedVacancies = [];
   let currentPage = 0;
-  const maxPagesToCheck = 5; // Ограничение глубины поиска (5 страниц = 250 вакансий) для защиты от блокировок
+  const maxPagesToCheck = 5; 
 
-  // Цикл постраничного поиска новых вакансий
   while (currentPage < maxPagesToCheck) {
+    // Точка отмены №1: Проверяем перед загрузкой очередной страницы поиска
+    if (await shouldAbortVacancyLoop(config.id)) {
+      await logMessage(`[Просмотр] Поиск страниц остановлен пользователем.`, "warning");
+      return;
+    }
+
     const pageUrl = `${baseSearchUrl}&page=${currentPage}`;
     await logMessage(`[Просмотр] Анализ страницы поиска ${currentPage + 1}...`, "info");
     
@@ -53,14 +74,11 @@ export async function viewRecommendedVacancies(config) {
     }
 
     if (pageUnviewed.length > 0) {
-      // Нашли новые вакансии на этой странице! Прерываем поиск страниц и берем их в обработку
       unviewedVacancies = pageUnviewed;
       break; 
     } else {
-      // Если на этой странице все вакансии уже просмотрены ранее — идем глубже
       await logMessage(`[Просмотр] На странице ${currentPage + 1} все вакансии уже просмотрены. Ищем на следующей...`, "info");
       currentPage++;
-      // Небольшая случайная пауза перед загрузкой следующей страницы поиска, чтобы имитировать человека
       await delay(2000 + Math.floor(Math.random() * 2000));
     }
   }
@@ -74,9 +92,14 @@ export async function viewRecommendedVacancies(config) {
   await logMessage(`[Просмотр вакансий] На странице поиска ${currentPage + 1} найдено новых вакансий: ${unviewedVacancies.length}. Начинаем автоматический обход...`, "success");
 
   for (let i = 0; i < unviewedVacancies.length; i++) {
+    // Точка отмены №2: Проверяем перед открытием КАЖДОЙ новой вкладки вакансии
+    if (await shouldAbortVacancyLoop(config.id)) {
+      await logMessage(`[Просмотр] Обход вакансий принудительно остановлен пользователем.`, "warning");
+      break; // Полностью прерываем цикл
+    }
+
     const vacancy = unviewedVacancies[i];
     
-    // Рандомизация времени нахождения на странице
     const jitter = Math.floor(Math.random() * 7) - 3; 
     const actualDuration = Math.max(5, baseDuration + jitter);
 
@@ -89,11 +112,10 @@ export async function viewRecommendedVacancies(config) {
       console.error("Ошибка при обработке вкладки вакансии:", err);
     }
     
-    // Пауза перед следующей вкладкой
     const nextTabDelay = 2000 + Math.floor(Math.random() * 3000);
     await delay(nextTabDelay);
   }
-  await logMessage("[Просмотр вакансий] Все новые вакансии на найденной странице успешно обработаны.", "success");
+  await logMessage("[Просмотр вакансий] Сессия обхода завершена.", "success");
 }
 
 function harvestVacancyLinks(url) {
