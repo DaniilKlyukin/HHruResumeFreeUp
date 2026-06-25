@@ -2,7 +2,24 @@ import { logMessage } from './logger.js';
 import { isExtensionEnabled, registerSystemTab, unregisterSystemTab, gcSystemTabs } from './storage.js';
 import { viewRecommendedVacancies } from './vacancies.js';
 
-const delay = (ms) => new Promise(res => setTimeout(res, ms));
+// Специальный delay, поддерживающий активность Service Worker во время длительных ожиданий
+const delay = (ms) => {
+  if (ms < 8000) {
+    return new Promise(res => setTimeout(res, ms));
+  }
+  return new Promise(res => {
+    const start = Date.now();
+    const interval = setInterval(() => {
+      chrome.runtime.getPlatformInfo(() => {
+        if (chrome.runtime.lastError) { /* подавление возможных ошибок контекста */ }
+      });
+      if (Date.now() - start >= ms) {
+        clearInterval(interval);
+        res();
+      }
+    }, 8000);
+  });
+};
 
 async function safeRemoveTab(tabId) {
   if (!tabId) return;
@@ -91,7 +108,7 @@ export async function processPendingUpdates() {
   }
 }
 
- function executeUpdateInHiddenTab(resumeId) {
+function executeUpdateInHiddenTab(resumeId) {
   return new Promise((resolve) => {
     chrome.tabs.create({ url: `https://hh.ru/resume/${resumeId}`, active: false }, async (tab) => {
       if (chrome.runtime.lastError || !tab || !tab.id) {
@@ -114,15 +131,11 @@ export async function processPendingUpdates() {
       };
 
       const runScript = async () => {
-        // Защита №1: Если вкладка уже находится в процессе закрытия/разрешения, выходим
         if (isResolved) return;
         
-        // Мгновенно отключаем слушатель обновлений, чтобы предотвратить дублирующие вызовы runScript
         chrome.tabs.onUpdated.removeListener(listener);
 
-        // Даем странице 1.5 секунды на окончательную стабилизацию верстки
         setTimeout(async () => {
-          // Защита №2: Проверяем, существует ли вкладка физически перед инъекцией скрипта
           try {
             const checkTab = await chrome.tabs.get(tabId);
             if (!checkTab) {
@@ -130,7 +143,6 @@ export async function processPendingUpdates() {
               return;
             }
           } catch (_) {
-            // Вкладка была закрыта пользователем или системой во время ожидания тайм-аута
             await cleanUpAndResolve('error');
             return;
           }
@@ -139,7 +151,7 @@ export async function processPendingUpdates() {
             const results = await chrome.scripting.executeScript({
               target: { tabId: tabId },
               func: async (id) => {
-                const delay = (ms) => new Promise(res => setTimeout(res, ms));
+                const innerDelay = (ms) => new Promise(res => setTimeout(res, ms));
                 
                 for (let i = 0; i < 30; i++) {
                   let btn = document.querySelector(`[data-qa="resume-update-button_${id}"]`);
@@ -166,10 +178,10 @@ export async function processPendingUpdates() {
                     }
                     
                     btn.click();
-                    await delay(4000); 
+                    await innerDelay(4000); 
                     return 'clicked';
                   }
-                  await delay(500);
+                  await innerDelay(500);
                 }
                 
                 const pageText = document.body.textContent || '';
@@ -190,7 +202,6 @@ export async function processPendingUpdates() {
             const status = results && results[0] && results[0].result;
             await cleanUpAndResolve(status || 'error');
           } catch (e) {
-            // Мягкий перехват исключения, если вкладка закрылась прямо во время выполнения скрипта
             console.error("Ошибка выполнения скрипта во вкладке:", e);
             await cleanUpAndResolve('error');
           }

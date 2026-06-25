@@ -1,5 +1,3 @@
-// 1. УТИЛИТЫ И ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
-
 function formatTime(timestamp) {
   if (!timestamp) return 'Нет данных';
   const date = new Date(timestamp);

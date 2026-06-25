@@ -11,22 +11,16 @@ async function initScheduler() {
 // Функция автоматического восстановления данных из профиля Google Sync
 async function restoreDataFromCloudSync() {
   try {
-    const syncData = await chrome.storage.sync.get(['resumesBackup', 'viewedVacanciesBackup']);
+    const syncData = await chrome.storage.sync.get(['resumesBackup']);
     const localUpdate = {};
 
     if (syncData.resumesBackup) {
       localUpdate.resumes = syncData.resumesBackup;
     }
 
-    if (syncData.viewedVacanciesBackup) {
-      // Преобразуем сохраненную CSV-строку обратно в рабочий массив
-      const array = syncData.viewedVacanciesBackup.split(',').filter(Boolean);
-      localUpdate.viewedVacancies = array;
-    }
-
     if (Object.keys(localUpdate).length > 0) {
       await chrome.storage.local.set(localUpdate);
-      await logMessage("Данные успешно восстановлены из облака Google Sync при переустановке.", "success");
+      await logMessage("Данные успешно восстановлены из облака Google Sync при инициализации.", "success");
     }
   } catch (e) {
     console.error("Ошибка автоматического восстановления данных из облака Sync:", e);
@@ -34,7 +28,7 @@ async function restoreDataFromCloudSync() {
 }
 
 chrome.runtime.onInstalled.addListener(async (details) => {
-  // Пытаемся восстановить данные из облака Google перед запуском логики
+  // Пытаемся восстановить конфигурации резюме из облака Google перед запуском логики
   await restoreDataFromCloudSync();
   
   await initScheduler();
@@ -65,7 +59,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 
 chrome.storage.onChanged.addListener(async (changes, areaName) => {
   if (areaName === 'local') {
-    
+    // Резервное копирование только для параметров резюме (resumes)
     if (changes.resumes) {
       try {
         await chrome.storage.sync.set({ resumesBackup: changes.resumes.newValue });
@@ -73,16 +67,5 @@ chrome.storage.onChanged.addListener(async (changes, areaName) => {
         console.error("Ошибка синхронизации настроек резюме с облаком:", e);
       }
     }
-    
-    if (changes.viewedVacancies) {
-      try {
-        const list = changes.viewedVacancies.newValue || [];
-        const syncSubList = list.slice(-500); 
-        await chrome.storage.sync.set({ viewedVacanciesBackup: syncSubList.join(',') });
-      } catch (e) {
-        console.error("Ошибка синхронизации кэша вакансий с облаком:", e);
-      }
-    }
-    
   }
 });

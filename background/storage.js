@@ -19,7 +19,7 @@ export async function markVacancyAsViewed(id) {
   }
 }
 
-// Получение общего статуса включения расширения (VPN-стиль)
+// Получение общего статуса включения расширения
 export async function isExtensionEnabled() {
   const { extensionEnabled = true } = await chrome.storage.local.get('extensionEnabled');
   return extensionEnabled;

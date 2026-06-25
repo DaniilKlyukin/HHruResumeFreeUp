@@ -1,7 +1,24 @@
 import { logMessage } from './logger.js';
 import { isVacancyViewed, markVacancyAsViewed, registerSystemTab, unregisterSystemTab, isExtensionEnabled } from './storage.js';
 
-const delay = (ms) => new Promise(res => setTimeout(res, ms));
+// Специальный delay, поддерживающий активность Service Worker во время длительных ожиданий
+const delay = (ms) => {
+  if (ms < 8000) {
+    return new Promise(res => setTimeout(res, ms));
+  }
+  return new Promise(res => {
+    const start = Date.now();
+    const interval = setInterval(() => {
+      chrome.runtime.getPlatformInfo(() => {
+        if (chrome.runtime.lastError) { /* подавление возможных ошибок контекста */ }
+      });
+      if (Date.now() - start >= ms) {
+        clearInterval(interval);
+        res();
+      }
+    }, 8000);
+  });
+};
 
 async function safeRemoveTab(tabId) {
   if (!tabId) return;
@@ -22,13 +39,10 @@ function extractVacancyId(url) {
   }
 }
 
-// Служебная проверка: не остановил ли пользователь работу программы во время выполнения цикла
 async function shouldAbortVacancyLoop(resumeId) {
-  // 1. Проверяем глобальный VPN-переключатель работы плагина
   const enabled = await isExtensionEnabled();
   if (!enabled) return true;
 
-  // 2. Проверяем статус активности конкретного резюме
   const { resumes = [] } = await chrome.storage.local.get('resumes');
   const currentConfig = resumes.find(r => r.id === resumeId);
   if (!currentConfig || !currentConfig.isActive) {
@@ -47,7 +61,6 @@ export async function viewRecommendedVacancies(config) {
   const maxPagesToCheck = 5; 
 
   while (currentPage < maxPagesToCheck) {
-    // Точка отмены №1: Проверяем перед загрузкой очередной страницы поиска
     if (await shouldAbortVacancyLoop(config.id)) {
       await logMessage(`[Просмотр] Поиск страниц остановлен пользователем.`, "warning");
       return;
@@ -92,10 +105,9 @@ export async function viewRecommendedVacancies(config) {
   await logMessage(`[Просмотр вакансий] На странице поиска ${currentPage + 1} найдено новых вакансий: ${unviewedVacancies.length}. Начинаем автоматический обход...`, "success");
 
   for (let i = 0; i < unviewedVacancies.length; i++) {
-    // Точка отмены №2: Проверяем перед открытием КАЖДОЙ новой вкладки вакансии
     if (await shouldAbortVacancyLoop(config.id)) {
       await logMessage(`[Просмотр] Обход вакансий принудительно остановлен пользователем.`, "warning");
-      break; // Полностью прерываем цикл
+      break;
     }
 
     const vacancy = unviewedVacancies[i];
@@ -198,14 +210,21 @@ export function viewSingleVacancy(url, durationSeconds, config) {
         if (updatedTabId === tabId && changeInfo.status === 'complete') {
           setTimeout(async () => {
             try {
+              // Превентивная проверка: если пользователь остановил работу во время ожидания таймера
+              if (await shouldAbortVacancyLoop(config.id)) {
+                await cleanUpAndResolve();
+                return;
+              }
+
               let likedStatus = null;
 
               if (config.autoLikeVacancies === true && config.likeKeywords) {
                 const results = await chrome.scripting.executeScript({
                   target: { tabId: tabId },
                   func: async (keywordsStr, minMatches, minLikePercentage) => {
-                    const delay = (ms) => new Promise(res => setTimeout(res, ms));
-                    const keywords = keywordsStr.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+                    const innerDelay = (ms) => new Promise(res => setTimeout(res, ms));
+                    const safeKeywordsStr = keywordsStr || '';
+                    const keywords = safeKeywordsStr.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
                     const bodyText = (document.body.textContent || '').toLowerCase();
                     
                     let vacancySkills = [];
@@ -275,7 +294,7 @@ export function viewSingleVacancy(url, durationSeconds, config) {
                         
                         if (!isAlreadyFavorited) {
                           favBtn.click();
-                          await delay(1200); 
+                          await innerDelay(1200); 
                           return { 
                             liked: true, 
                             usingPercentage: (vacancySkills.length > 0),
@@ -311,7 +330,7 @@ export function viewSingleVacancy(url, durationSeconds, config) {
                       matchedSkills 
                     };
                   },
-                  args: [config.likeKeywords, config.minLikeMatches || 3, config.minLikePercentage || 60]
+                  args: [config.likeKeywords || '', config.minLikeMatches || 3, config.minLikePercentage || 60]
                 });
 
                 likedStatus = results && results[0] && results[0].result ? results[0].result : null;
@@ -338,7 +357,13 @@ export function viewSingleVacancy(url, durationSeconds, config) {
 
               await cleanUpAndResolve();
             } catch (e) {
-              console.error("Ошибка при работе с вкладкой вакансии:", e);
+              // Если ошибка произошла во время деактивации — подавляем ее в логах, так как это нормальный процесс прерывания
+              const shouldAbort = await shouldAbortVacancyLoop(config.id);
+              if (!shouldAbort) {
+                console.error("Ошибка при работе с вкладкой вакансии:", e);
+              } else {
+                console.log("Просмотр вакансии остановлен пользователем. Вкладка закрыта.");
+              }
               await cleanUpAndResolve();
             }
           }, durationSeconds * 1000);
