@@ -173,7 +173,12 @@ function harvestVacancyLinks(url) {
               const links = results && results[0] && results[0].result ? results[0].result : [];
               await cleanUpAndResolve(links);
             } catch (e) {
-              console.error("[Просмотр вакансий] Ошибка сбора ссылок:", e);
+              const errMsg = e.message || String(e);
+              if (errMsg.includes("Frame with ID 0 was removed") || errMsg.includes("closed") || errMsg.includes("invalidated")) {
+                console.warn("[Просмотр вакансий] Страница поиска была перенаправлена или закрыта во время сбора ссылок.");
+              } else {
+                console.error("[Просмотр вакансий] Ошибка сбора ссылок:", e);
+              }
               await cleanUpAndResolve([]);
             }
           }, 3000);

@@ -202,7 +202,13 @@ function executeUpdateInHiddenTab(resumeId) {
             const status = results && results[0] && results[0].result;
             await cleanUpAndResolve(status || 'error');
           } catch (e) {
-            console.error("Ошибка выполнения скрипта во вкладке:", e);
+            const errMsg = e.message || String(e);
+            // Если фрейм удален, вкладка закрыта или контекст недействителен — обрабатываем мягко
+            if (errMsg.includes("Frame with ID 0 was removed") || errMsg.includes("closed") || errMsg.includes("invalidated")) {
+              console.warn(`[Планировщик] Вкладка резюме ${resumeId} изменила состояние (возможен редирект или закрытие). Проверьте авторизацию на hh.ru.`);
+            } else {
+              console.error("Ошибка выполнения скрипта во вкладке:", e);
+            }
             await cleanUpAndResolve('error');
           }
         }, 1500);
