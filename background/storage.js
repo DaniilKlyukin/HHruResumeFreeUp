@@ -1,13 +1,26 @@
-// Проверка наличия вакансии в кеше просмотренных
+// Проверка наличия вакансии в кеше просмотренных с учетом активности тумблера
 export async function isVacancyViewed(id) {
   if (!id) return false;
+  
+  // Проверяем, включен ли кэш глобально
+  const { vacancyCacheEnabled = true } = await chrome.storage.local.get('vacancyCacheEnabled');
+  if (!vacancyCacheEnabled) {
+    return false; // Если кэш выключен, всегда считаем вакансию новой
+  }
+
   const { viewedVacancies = [] } = await chrome.storage.local.get('viewedVacancies');
   return viewedVacancies.includes(id);
 }
 
-// Добавление вакансии в кеш просмотренных (с ограничением размера кеша до 2000 записей)
+// Добавление вакансии в кеш просмотренных (только если кэш включен)
 export async function markVacancyAsViewed(id) {
   if (!id) return;
+
+  const { vacancyCacheEnabled = true } = await chrome.storage.local.get('vacancyCacheEnabled');
+  if (!vacancyCacheEnabled) {
+    return; // Если кэш выключен, не записываем
+  }
+
   const { viewedVacancies = [] } = await chrome.storage.local.get('viewedVacancies');
   
   if (!viewedVacancies.includes(id)) {
@@ -50,16 +63,12 @@ export async function gcSystemTabs() {
 
   for (const [tabIdStr, openedAt] of Object.entries(systemTabs)) {
     const tabId = parseInt(tabIdStr, 10);
-    // Закрываем вкладку, если она удерживается открытой более 3 минут
     if (now - openedAt > 3 * 60 * 1000) {
       try {
         await chrome.tabs.remove(tabId);
-      } catch (_) {
-        // Вкладка могла быть закрыта пользователем вручную
-      }
+      } catch (_) {}
       delete updatedTabs[tabIdStr];
     } else {
-      // Проверяем физическое существование вкладки в браузере
       try {
         await chrome.tabs.get(tabId);
       } catch (_) {

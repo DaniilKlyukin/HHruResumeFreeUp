@@ -235,11 +235,19 @@ const extensionGlobalToggle = document.getElementById('extensionGlobalToggle');
 
 const formTitle = document.getElementById('formTitle');
 
+const vacancyCacheToggle = document.getElementById('vacancyCacheToggle');
+
+// Объединенный и очищенный от дублей слушатель DOMContentLoaded
 document.addEventListener('DOMContentLoaded', async () => {
   await loadData();
   await renderLogs();
   
-  const data = await chrome.storage.local.get({ loggingEnabled: true, logsCollapsed: true, extensionEnabled: true });
+  const data = await chrome.storage.local.get({ 
+    loggingEnabled: true, 
+    logsCollapsed: true, 
+    extensionEnabled: true,
+    vacancyCacheEnabled: true 
+  });
   
   if (loggingToggle) {
     loggingToggle.checked = data.loggingEnabled !== false;
@@ -248,6 +256,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (extensionGlobalToggle) {
     extensionGlobalToggle.checked = data.extensionEnabled !== false;
     updateGlobalStatusUI(extensionGlobalToggle.checked);
+  }
+
+  if (vacancyCacheToggle) {
+    vacancyCacheToggle.checked = data.vacancyCacheEnabled !== false;
   }
   
   if (data.logsCollapsed === true) {
@@ -258,6 +270,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     toggleLogsBtnText(true);
   }
 });
+
+if (vacancyCacheToggle) {
+  vacancyCacheToggle.addEventListener('change', async (e) => {
+    await chrome.storage.local.set({ vacancyCacheEnabled: e.target.checked });
+  });
+}
 
 if (extensionGlobalToggle) {
   extensionGlobalToggle.addEventListener('change', async (e) => {
@@ -323,9 +341,31 @@ if (clearLogsBtn) {
 const clearCacheBtn = document.getElementById('clearCacheBtn');
 if (clearCacheBtn) {
   clearCacheBtn.addEventListener('click', async () => {
-    if (confirm('Сбросить базу данных просмотренных вакансий? Ранее обойденные вакансии снова будут расцениваться расширением как новые.')) {
+    if (confirm('Сбросить базу данных просмотренных вакансий? Ранее обойденные вакансии снова будут расцениваться как новые. Также будет немедленно перезапущен поиск вакансий.')) {
+      
       await chrome.storage.local.set({ viewedVacancies: [] });
-      alert('Кэш просмотренных вакансий успешно очищен.');
+      
+      const data = await chrome.storage.local.get({ resumes: [] });
+      const resumes = data.resumes;
+      
+      const updatedResumes = resumes.map(config => {
+        config.lastVacanciesViewedAt = 0; 
+        if (config.isActive) {
+          config.nextExecutionAt = Date.now(); 
+        }
+        return config;
+      });
+      
+      await chrome.storage.local.set({ resumes: updatedResumes });
+      await loadData();
+      
+      alert('Кэш успешно очищен. Поиск вакансий перезапускается...');
+      
+      try {
+        await chrome.runtime.sendMessage({ action: "triggerUpdate" }).catch(() => {});
+      } catch (err) {
+        console.log("Запрос к фоновому процессу отложен до инициализации.");
+      }
     }
   });
 }

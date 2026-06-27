@@ -58,21 +58,31 @@ export async function viewRecommendedVacancies(config) {
   
   let unviewedVacancies = [];
   let currentPage = 0;
-  const maxPagesToCheck = 5; 
+  let maxPagesDetected = 1; // Динамический лимит страниц (определится на первой странице)
 
-  while (currentPage < maxPagesToCheck) {
+  // Цикл работает в пределах реально существующих страниц на hh.ru
+  while (currentPage < maxPagesDetected) {
     if (await shouldAbortVacancyLoop(config.id)) {
       await logMessage(`[Просмотр] Поиск страниц остановлен пользователем.`, "warning");
       return;
     }
 
     const pageUrl = `${baseSearchUrl}&page=${currentPage}`;
-    await logMessage(`[Просмотр] Анализ страницы поиска ${currentPage + 1}...`, "info");
+    await logMessage(`[Просмотр] Анализ страницы поиска ${currentPage + 1} из ${maxPagesDetected}...`, "info");
     
-    const links = await harvestVacancyLinks(pageUrl);
+    const harvestResult = await harvestVacancyLinks(pageUrl);
+    const links = harvestResult.links;
+
+    // Динамически обновляем максимальное количество страниц на основе верстки пагинатора
+    if (harvestResult.maxPage > maxPagesDetected) {
+      maxPagesDetected = harvestResult.maxPage;
+      await logMessage(`[Просмотр] Обнаружено реальное количество страниц для обхода: ${maxPagesDetected}`, "info");
+    }
+
     if (!links || links.length === 0) {
-      await logMessage(`[Просмотр] Страница ${currentPage + 1} пуста или недоступна. Прекращаем поиск.`, "warning");
-      break;
+      await logMessage(`[Просмотр] Страница ${currentPage + 1} пуста. Переходим к следующей.`, "warning");
+      currentPage++;
+      continue;
     }
 
     const pageUnviewed = [];
@@ -87,22 +97,24 @@ export async function viewRecommendedVacancies(config) {
     }
 
     if (pageUnviewed.length > 0) {
-      unviewedVacancies = pageUnviewed;
-      break; 
+      unviewedVacancies.push(...pageUnviewed);
+      await logMessage(`[Просмотр] На странице ${currentPage + 1} добавлено новых вакансий: ${pageUnviewed.length}. Всего собрано: ${unviewedVacancies.length}`, "info");
     } else {
-      await logMessage(`[Просмотр] На странице ${currentPage + 1} все вакансии уже просмотрены. Ищем на следующей...`, "info");
-      currentPage++;
-      await delay(2000 + Math.floor(Math.random() * 2000));
+      await logMessage(`[Просмотр] На странице ${currentPage + 1} все вакансии уже просмотрены ранее.`, "info");
     }
+
+    currentPage++;
+    // Короткая задержка перед переходом к следующей странице
+    await delay(1500 + Math.floor(Math.random() * 1500));
   }
 
   if (unviewedVacancies.length === 0) {
-    await logMessage(`[Просмотр вакансий] Все вакансии на первых ${maxPagesToCheck} страницах рекомендаций уже были просмотрены ранее.`, "info");
+    await logMessage(`[Просмотр вакансий] На всех ${maxPagesDetected} страницах рекомендаций новые вакансии отсутствуют.`, "info");
     return;
   }
 
   const baseDuration = config.vacancyViewDuration || 15;
-  await logMessage(`[Просмотр вакансий] На странице поиска ${currentPage + 1} найдено новых вакансий: ${unviewedVacancies.length}. Начинаем автоматический обход...`, "success");
+  await logMessage(`[Просмотр вакансий] Начинаем непрерывный автоматический обход всех собранных вакансий (${unviewedVacancies.length})...`, "success");
 
   for (let i = 0; i < unviewedVacancies.length; i++) {
     if (await shouldAbortVacancyLoop(config.id)) {
@@ -134,17 +146,17 @@ function harvestVacancyLinks(url) {
   return new Promise((resolve) => {
     chrome.tabs.create({ url, active: false }, async (tab) => {
       if (chrome.runtime.lastError || !tab || !tab.id) { 
-        resolve([]); 
+        resolve({ links: [], maxPage: 1 }); 
         return; 
       }
       const tabId = tab.id;
       await registerSystemTab(tabId);
 
-      const cleanUpAndResolve = async (resultLinks) => {
+      const cleanUpAndResolve = async (resultObj) => {
         chrome.tabs.onUpdated.removeListener(listener);
         clearTimeout(safetyTimeout);
         await safeRemoveTab(tabId);
-        resolve(resultLinks);
+        resolve(resultObj);
       };
 
       const listener = async (updatedTabId, changeInfo) => {
@@ -154,6 +166,7 @@ function harvestVacancyLinks(url) {
               const results = await chrome.scripting.executeScript({
                 target: { tabId: tabId },
                 func: () => {
+                  // 1. Сбор ссылок на вакансии
                   const anchors = Array.from(document.querySelectorAll('a[href*="/vacancy/"]'));
                   const urls = anchors
                     .map(a => a.href)
@@ -166,12 +179,27 @@ function harvestVacancyLinks(url) {
                         return href;
                       }
                     });
-                  return Array.from(new Set(urls)); 
+                  const uniqueUrls = Array.from(new Set(urls));
+
+                  // 2. Определение максимальной страницы из блока пагинации
+                  const pagerElements = Array.from(document.querySelectorAll('[data-qa="pager-page"], .pager-page, .pager-item'));
+                  const pageNums = pagerElements
+                    .map(el => parseInt(el.textContent.trim(), 10))
+                    .filter(n => !isNaN(n));
+                  const maxPageNum = pageNums.length > 0 ? Math.max(...pageNums) : 1;
+
+                  return {
+                    links: uniqueUrls,
+                    maxPage: maxPageNum
+                  };
                 }
               });
 
-              const links = results && results[0] && results[0].result ? results[0].result : [];
-              await cleanUpAndResolve(links);
+              const result = results && results[0] && results[0].result 
+                ? results[0].result 
+                : { links: [], maxPage: 1 };
+                
+              await cleanUpAndResolve(result);
             } catch (e) {
               const errMsg = e.message || String(e);
               if (errMsg.includes("Frame with ID 0 was removed") || errMsg.includes("closed") || errMsg.includes("invalidated")) {
@@ -179,7 +207,7 @@ function harvestVacancyLinks(url) {
               } else {
                 console.error("[Просмотр вакансий] Ошибка сбора ссылок:", e);
               }
-              await cleanUpAndResolve([]);
+              await cleanUpAndResolve({ links: [], maxPage: 1 });
             }
           }, 3000);
         }
@@ -188,7 +216,7 @@ function harvestVacancyLinks(url) {
       chrome.tabs.onUpdated.addListener(listener);
 
       const safetyTimeout = setTimeout(async () => {
-        await cleanUpAndResolve([]);
+        await cleanUpAndResolve({ links: [], maxPage: 1 });
       }, 20000);
     });
   });
@@ -215,7 +243,6 @@ export function viewSingleVacancy(url, durationSeconds, config) {
         if (updatedTabId === tabId && changeInfo.status === 'complete') {
           setTimeout(async () => {
             try {
-              // Превентивная проверка: если пользователь остановил работу во время ожидания таймера
               if (await shouldAbortVacancyLoop(config.id)) {
                 await cleanUpAndResolve();
                 return;
@@ -362,7 +389,6 @@ export function viewSingleVacancy(url, durationSeconds, config) {
 
               await cleanUpAndResolve();
             } catch (e) {
-              // Если ошибка произошла во время деактивации — подавляем ее в логах, так как это нормальный процесс прерывания
               const shouldAbort = await shouldAbortVacancyLoop(config.id);
               if (!shouldAbort) {
                 console.error("Ошибка при работе с вкладкой вакансии:", e);
